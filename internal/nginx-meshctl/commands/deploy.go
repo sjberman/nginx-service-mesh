@@ -655,6 +655,8 @@ func cleanup(k8sClient k8s.Client) {
 	err := newRemover(k8sClient).remove("nginx-service-mesh", deleteNamespace)
 	if err == nil {
 		fmt.Println("All NGINX Service Mesh resources have been deleted.")
+	} else {
+		fmt.Println(err)
 	}
 }
 

@@ -137,9 +137,9 @@ Once received by the destination proxy container, the PROXY protocol V2 header i
 
 Kubernetes resources and container names:
 
-- Containers: spire-server, k8s-workload-registrar, spire-agent
+- Containers: spire-server, spire-controller-manager, spire-agent
 - Resources: statefulset|deployment/spire-server, daemonset/spire-agent
-- Services: service/spire-server, service/k8s-workload-registrar
+- Services: service/spire-server, service/spire-server-bundle-endpoint
 
 NGINX Service Mesh uses mutual TLS (mTLS) to encrypt and authenticate data sent between injected Pods. mTLS extends standard TLS by having both the client and server present a certificate and mutually authenticate each other. mTLS is “zero-touch,” meaning developers don't need to retrofit their applications with certificates.
 
@@ -150,10 +150,10 @@ NGINX Service Mesh integrates [SPIRE](https://github.com/spiffe/spire) as its ce
 
 The important components in the diagram are:
 
-- **SPIRE Server**: The SPIRE Server runs as a Kubernetes StatefulSet (or Deployment if no [persistent storage]({{< ref "/get-started/kubernetes-platform/persistent-storage.md" >}}) is available). It has two containers - the actual `spire-server` and the `k8s-workload-registrar`.
+- **SPIRE Server**: The SPIRE Server runs as a Kubernetes StatefulSet (or Deployment if no [persistent storage]({{< ref "/get-started/kubernetes-platform/persistent-storage.md" >}}) is available). It has two containers - the actual `spire-server` and the `spire-controller-manager`.
 
   - **spire-server**: The core of the NGINX Service Mesh mTLS architecture, `spire-server` is the certificate authority (CA) that issues certificates for workloads and pushes them to the SPIRE Agent. `spire-server` can be the root CA for all services in the mesh or an intermediate CA in the trust chain.
-  - **k8s-workload-registrar**: When new Pods are created, `k8s-workload-registrar` makes API calls to request that `spire-server` generate a new certificate. `k8s-workload-registrar` communicates with `spire-server` through a Unix socket. The `k8s-workload-registrar` is based on a Kubernetes Custom Resource Definition (CRD).
+  - **spire-controller-manager**: When new Pods are created, `spire-controller-manager` makes API calls to request that `spire-server` generate a new certificate. `spire-controller-manager` communicates with `spire-server` through a Unix socket.
 
 - **SPIRE Agent**: The SPIRE Agent runs as a Kubernetes DaemonSet, meaning one copy runs per node. The SPIRE Agent has two main functions:
 
@@ -173,8 +173,8 @@ The first stage in the mTLS workflow is creating the actual certificate:
 
 1. The Pod is deployed.
 1. The NGINX Service Mesh control plane injects the sidecar into the Pod configuration using a mutating webhook.
-1. In response to a "Pod Created" event notification, `k8s-workload-registrar` gathers the information needed to create the certificate, such as the `ServiceAccount` name.
-1. `k8s-workload-registrar` makes an API call to `spire-server` over a Unix socket to request a certificate for the Pod.
+1. In response to a "Pod Created" event notification, `spire-controller-manager` gathers the information needed to create the certificate, such as the `ServiceAccount` name.
+1. `spire-controller-manager` makes an API call to `spire-server` over a Unix socket to request a certificate for the Pod.
 1. `spire-server` mints a certificate for the Pod.
 
 ##### Distribution

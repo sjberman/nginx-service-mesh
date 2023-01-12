@@ -175,15 +175,17 @@ func (k *ClientImpl) DynamicClientSet() dynamic.Interface {
 }
 
 var meshCRDs = map[string]struct{}{
-	"spiffeids.spiffeid.spiffe.io":        {},
-	"trafficsplits.split.smi-spec.io":     {},
-	"traffictargets.access.smi-spec.io":   {},
-	"httproutegroups.specs.smi-spec.io":   {},
-	"tcproutes.specs.smi-spec.io":         {},
-	"ratelimits.specs.smi.nginx.com":      {},
-	"circuitbreakers.specs.smi.nginx.com": {},
-	"meshconfigclasses.nsm.nginx.com":     {},
-	"meshconfigs.nsm.nginx.com":           {},
+	"spiffeids.spiffeid.spiffe.io":                 {},
+	"trafficsplits.split.smi-spec.io":              {},
+	"traffictargets.access.smi-spec.io":            {},
+	"httproutegroups.specs.smi-spec.io":            {},
+	"tcproutes.specs.smi-spec.io":                  {},
+	"ratelimits.specs.smi.nginx.com":               {},
+	"circuitbreakers.specs.smi.nginx.com":          {},
+	"meshconfigclasses.nsm.nginx.com":              {},
+	"meshconfigs.nsm.nginx.com":                    {},
+	"clusterfederatedtrustdomains.spire.spiffe.io": {},
+	"clusterspiffeids.spire.spiffe.io":             {},
 }
 
 var errCRDAlreadyExists = errors.New("CRD already exists")

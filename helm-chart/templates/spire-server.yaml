@@ -55,30 +55,77 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: k8s-workload-registrar.security.builtin.nsm.nginx
+  name: spire-controller-manager.security.builtin.nsm.nginx
   labels:
     app.kubernetes.io/part-of: nginx-service-mesh
 rules:
 - apiGroups: [""]
-  resources: ["endpoints", "pods", "nodes"]
+  resources: ["pods", "namespaces", "nodes"]
   verbs: ["get", "list", "watch"]
-- apiGroups: ["spiffeid.spiffe.io"]
-  resources: ["spiffeids"]
-  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
-- apiGroups: ["spiffeid.spiffe.io"]
-  resources: ["spiffeids/status"]
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingwebhookconfigurations"]
+  verbs: ["get", "list", "patch", "watch"]
+- apiGroups: ["spire.spiffe.io"]
+  resources: ["clusterfederatedtrustdomains"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["spire.spiffe.io"]
+  resources: ["clusterfederatedtrustdomains/finalizers"]
+  verbs: ["update"]
+- apiGroups: ["spire.spiffe.io"]
+  resources: ["clusterfederatedtrustdomains/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["spire.spiffe.io"]
+  resources: ["clusterspiffeids"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["spire.spiffe.io"]
+  resources: ["clusterspiffeids/finalizers"]
+  verbs: ["update"]
+- apiGroups: ["spire.spiffe.io"]
+  resources: ["clusterspiffeids/status"]
   verbs: ["get", "patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: k8s-workload-registrar.security.builtin.nsm.nginx
+  name: spire-controller-manager.security.builtin.nsm.nginx
   labels:
     app.kubernetes.io/part-of: nginx-service-mesh
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: k8s-workload-registrar.security.builtin.nsm.nginx
+  name: spire-controller-manager.security.builtin.nsm.nginx
+subjects:
+- kind: ServiceAccount
+  name: spire-server
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spire-leader-election
+  labels:
+    app.kubernetes.io/part-of: nginx-service-mesh
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spire-leader-election
+  labels:
+    app.kubernetes.io/part-of: nginx-service-mesh
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: spire-leader-election
 subjects:
 - kind: ServiceAccount
   name: spire-server
@@ -124,11 +171,45 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: k8s-workload-registrar
+  name: spire-controller-manager-config
   labels:
     app.kubernetes.io/part-of: nginx-service-mesh
 data:
-  k8s-workload-registrar.conf: {{ tpl (.Files.Get "configs/k8s-workload-registrar.conf") . | quote }}
+  spire-controller-manager-config.yaml: |
+    apiVersion: spire.spiffe.io/v1alpha1
+    kind: ControllerManagerConfig
+    metrics:
+      bindAddress: 127.0.0.1:8082
+    healthProbe:
+      bindAddress: 127.0.0.1:8083
+    leaderElection:
+      leaderElect: true
+      resourceName: {{ .Release.Name | sha256sum | trunc 8 }}.spiffe.io
+      resourceNamespace: {{ .Release.Namespace }}
+    clusterName: nginx-mesh
+    trustDomain: {{ .Values.mtls.trustDomain }}
+    spireServerSocketPath: /run/spire/sockets/spire-registration.sock
+    validatingWebhookConfigurationName: spire-controller-manager.security.builtin.nsm.nginx
+    ignoreNamespaces:
+    - kube-system
+---
+apiVersion: spire.spiffe.io/v1alpha1
+kind: ClusterSPIFFEID
+metadata:
+  name: spire-controller-manager.security.builtin.nsm.nginx
+  labels:
+    app.kubernetes.io/part-of: nginx-service-mesh
+spec:
+  spiffeIDTemplate: "spiffe://{{`{{ .TrustDomain }}`}}/ns/{{`{{ .PodMeta.Namespace }}`}}/sa/{{`{{ .PodSpec.ServiceAccountName }}`}}"
+  podSelector:
+    matchLabels:
+      spiffe.io/spiffeid: "true"
+  dnsNameTemplates:
+  - "{{`{{ .PodMeta.Name}}`}}"
+  #- "{{`{{ .PodSpec.ServiceAccountName }}`}}.{{`{{ .PodMeta.Namespace }}`}}.svc"
+  #- "{{`{{ index .PodMeta.Labels \"app\" }}`}}.{{`{{ .PodMeta.Namespace }}`}}.svc"
+  - "{{`{{ index .PodMeta.Labels \"app.kubernetes.io/name\" }}`}}.{{`{{ .PodMeta.Namespace }}`}}.svc"
+  # This doesn't add svc name to dns names...may need to open an issue if this is needed
 ---
 apiVersion: v1
 kind: Service
@@ -150,41 +231,70 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: k8s-workload-registrar
+  name: spire-server-bundle-endpoint
   labels:
-    app.kubernetes.io/name: k8s-workload-registrar
+    app.kubernetes.io/name: spire-server
+    app.kubernetes.io/part-of: nginx-service-mesh
+spec:
+  type: ClusterIP
+  ports:
+  - name: api
+    port: 8443
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: spire-server
+    app.kubernetes.io/part-of: nginx-service-mesh
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-controller-manager-webhook-service
+  labels:
+    app.kubernetes.io/name: spire-server
     app.kubernetes.io/part-of: nginx-service-mesh
 spec:
   ports:
-  - name: webhook
+  - port: 443
     protocol: TCP
-    port: 443
     targetPort: 9443
   selector:
     app.kubernetes.io/name: spire-server
+    app.kubernetes.io/part-of: nginx-service-mesh
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
-  name: k8s-workload-registrar.security.builtin.nsm.nginx
+  name: spire-controller-manager.security.builtin.nsm.nginx
   labels:
     app.kubernetes.io/part-of: nginx-service-mesh
     spiffe.io/webhook: "true"
 webhooks:
-- name: k8s-workload-registrar.{{ .Release.Namespace }}.svc
+- admissionReviewVersions: ["v1"]
   clientConfig:
     service:
-      name: k8s-workload-registrar
+      name: spire-controller-manager-webhook-service
       namespace: {{ .Release.Namespace }}
-      path: "/validate-spiffeid-spiffe-io-v1beta1-spiffeid"
-  sideEffects: None
-  admissionReviewVersions: ["v1"]
+      path: /validate-spire-spiffe-io-v1alpha1-clusterfederatedtrustdomain
+  name: vclusterfederatedtrustdomain.kb.io
   rules:
-  - apiGroups: ["spiffeid.spiffe.io"]
-    apiVersions: ["v1beta1"]
-    operations: ["CREATE", "UPDATE", "DELETE"]
-    resources: ["spiffeids"]
-    scope: Namespaced
+  - apiGroups: ["spire.spiffe.io"]
+    apiVersions: ["v1alpha1"]
+    operations: ["CREATE", "UPDATE"]
+    resources: ["clusterfederatedtrustdomains"]
+  sideEffects: None
+- admissionReviewVersions: ["v1"]
+  clientConfig:
+    service:
+      name: spire-controller-manager-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-spire-spiffe-io-v1alpha1-clusterspiffeid
+  name: vclusterspiffeid.kb.io
+  rules:
+  - apiGroups: ["spire.spiffe.io"]
+    apiVersions: ["v1alpha1"]
+    operations: ["CREATE", "UPDATE"]
+    resources: ["clusterspiffeids"]
+  sideEffects: None
 ---
 apiVersion: apps/v1
 {{- if eq .Values.mtls.persistentStorage "on" }}
@@ -250,40 +360,32 @@ spec:
           readOnly: false
         livenessProbe:
           httpGet:
-            port: 8082
             path: /live
+            port: 8080
           failureThreshold: 2
           initialDelaySeconds: 15
           periodSeconds: 60
           timeoutSeconds: 3
         readinessProbe:
           httpGet:
-            port: 8082
             path: /ready
+            port: 8080
           initialDelaySeconds: 5
           periodSeconds: 5
-      - name: k8s-workload-registrar
-        image: {{ include "spire.image-server" . }}/k8s-workload-registrar:1.5.4
+      - name: spire-controller-manager
+        image: {{ include "spiffe.image-server" . }}/spire-controller-manager:0.2.1
         imagePullPolicy: {{ .Values.registry.imagePullPolicy }}
-        args:
-        - -config
-        - /run/spire/config/k8s-workload-registrar.conf
         ports:
-        - name: webhook
-          protocol: TCP
-          containerPort: 9443
-        env:
-          - name: MY_POD_NAMESPACE
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.namespace
+        - containerPort: 9443
+        args:
+        - --config=spire-controller-manager-config.yaml
         volumeMounts:
-        - name: k8s-workload-registrar-config
-          mountPath: /run/spire/config
-          readOnly: true
         - name: spire-server-socket
           mountPath: /run/spire/sockets
           readOnly: true
+        - name: spire-controller-manager-config
+          mountPath: /spire-controller-manager-config.yaml
+          subPath: spire-controller-manager-config.yaml
       volumes:
       - name: spire-config
         configMap:
@@ -298,12 +400,12 @@ spec:
       {{- end }}
       - name: spire-server-socket
         emptyDir: {}
-      - name: k8s-workload-registrar-config
+      - name: spire-controller-manager-config
         configMap:
-          name: k8s-workload-registrar
+          name: spire-controller-manager-config
       {{- if eq .Values.mtls.persistentStorage "off" }}
       - name: spire-data
-        emptyDir: { }
+        emptyDir: {}
       {{- end }}
   {{- if eq .Values.mtls.persistentStorage "on" }}
   volumeClaimTemplates:
